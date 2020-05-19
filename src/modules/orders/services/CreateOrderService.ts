@@ -31,58 +31,62 @@ class CreateProductService {
   ) {}
 
   public async execute({ customer_id, products }: IRequest): Promise<Order> {
-    // Checkando se o customer é válido e o usuário existe
-    const user = await this.customersRepository.findById(customer_id);
+    // Checka se o usuário é válido
+    const customer = await this.customersRepository.findById(customer_id);
 
-    // Se não existir, erro
-    if (!user) throw new AppError('invalid customer id');
+    if (!customer) throw new AppError('Invalid customer id');
 
-    // Pegando os ids de todos os produtos para checkar
-    const productsIds = products.map(product => ({
-      id: product.id,
+    // Checka se os produtos são válidos
+    const requestedProductIds = products.map(requestedProduct => ({
+      id: requestedProduct.id,
     }));
 
-    // Fazendo a checkagem
-    const allProducts = await this.productsRepository.findAllById(productsIds);
+    const productsInStock = await this.productsRepository.findAllById(
+      requestedProductIds,
+    );
 
-    // Se o tamanho de produtos fornecido for menor que
-    // o de produtos validados, algum produto era inválido, erro
-    if (allProducts.length < productsIds.length)
-      throw new AppError("Error, you can't buy a invalid product");
+    const validProducts = products.length === productsInStock.length;
+
+    if (!validProducts) throw new AppError("You can't buy a invalid product");
 
     const updatedQuantities: IProduct[] = [];
 
-    // Precisamos ver se tem a quantidade suficiente para a compra,
-    // e atualizar a quantidade
-    const orderProducts = allProducts.map(product => {
-      const idx = products.findIndex(self => product.id === self.id);
+    // Vamos percorrer cada um dos produtos
+    const orderProducts = productsInStock.map(stock => {
+      // Vamos achar o requestProduct relacionado
+      const i = products.findIndex(self => self.id === stock.id);
+      const cart = products[i];
 
-      if (products[idx].quantity > product.quantity) {
+      // Vamos checkar se tem o suficiente em estoque
+      if (cart.quantity > stock.quantity) {
         throw new AppError(
-          `Product: ${product.name}. Required: ${products[idx].quantity}. Available: ${product.quantity}`,
+          `Sorry, we don't have enough ${stock.name} in stock.` +
+            `Requested ${cart.quantity}.` +
+            `Available ${stock.quantity}.`,
         );
       }
 
+      // atualizamos o estoque
       updatedQuantities.push({
-        id: product.id,
-        quantity: product.quantity - products[idx].quantity,
+        id: stock.id,
+        quantity: stock.quantity - cart.quantity,
       });
 
+      // Retornando os dados pro pedido
       return {
-        ...product,
-        quantity: products[idx].quantity,
+        product_id: stock.id,
+        price: stock.price,
+        quantity: cart.quantity,
       };
     });
 
+    // Fazendo o update no estoque
     await this.productsRepository.updateQuantity(updatedQuantities);
 
+    // Criando o pedido
     const order = await this.ordersRepository.create({
-      customer: user,
-      products: orderProducts.map(product => ({
-        product_id: product.id,
-        price: product.price,
-        quantity: product.quantity,
-      })),
+      customer,
+      products: orderProducts,
     });
 
     return order;
